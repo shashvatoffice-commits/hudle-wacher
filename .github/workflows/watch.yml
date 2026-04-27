@@ -1,0 +1,66 @@
+name: Hudle Padel Watcher
+
+on:
+  schedule:
+    # Every 5 minutes — GitHub's minimum cron cadence on free tier.
+    # Note: free-tier scheduled jobs can be delayed during peak load (often 5-10 min)
+    # but always run eventually. That's fine for slot watching.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # allow manual trigger from the Actions UI
+
+# We need to write the cache; no repo writes are needed.
+permissions:
+  contents: read
+  actions: write  # for cache save
+
+concurrency:
+  group: hudle-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4  # individual run is seconds; this is a hard ceiling
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Restore previous state.json from cache.
+      # We use a unique save key per run, then a `restore-keys:` prefix to fall
+      # back to the most recent cached version.
+      - name: Restore state cache
+        id: state-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: hudle-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            hudle-state-
+
+      - name: Run watcher
+        env:
+          HUDLE_TOKEN:        ${{ secrets.HUDLE_TOKEN }}
+          HUDLE_API_SECRET:   ${{ secrets.HUDLE_API_SECRET }}
+          HUDLE_APP_ID:       ${{ secrets.HUDLE_APP_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 watch.py
+
+      - name: Save state cache
+        if: always()  # save even if the run errored, so next run still has prior state
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: hudle-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-log-${{ github.run_id }}
+          path: watch.log
+          if-no-files-found: ignore
+          retention-days: 3

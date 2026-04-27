@@ -1,0 +1,10 @@
+# Local-only files — must NOT enter git
+state.json
+watch.log
+.venv/
+__pycache__/
+*.pyc
+
+# Local secrets (if you choose to test with a config.local.json overlay)
+config.local.json
+.env

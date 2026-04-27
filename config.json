@@ -1,0 +1,45 @@
+{
+  "_comment": "Hudle padel watcher — public config. Secrets come from env vars (see README).",
+  "horizon_days": 7,
+  "min_duration_minutes": 90,
+  "venues": [
+    {
+      "name": "Willingdon",
+      "venue_id": "da29aee3-5618-4a95-b9b7-2b1073fb0a65",
+      "slug": "willingdon-outdoor-sports-arena-maali-khata",
+      "facilities": [],
+      "auto_discover_padel": true,
+      "schedule": [
+        {"days": [0, 1, 2, 3, 4], "start": "18:00", "end": "22:00"},
+        {"days": [5, 6],          "start": "08:00", "end": "11:00"},
+        {"days": [5, 6],          "start": "17:00", "end": "22:00"}
+      ]
+    },
+    {
+      "name": "CCI",
+      "venue_id": "c7555a38-05f8-42a0-bf82-88fc3d7f96f8",
+      "slug": "the-cricket-club-of-india",
+      "facilities": [],
+      "auto_discover_padel": true,
+      "schedule": [
+        {"days": [0, 1, 2, 3, 4], "start": "18:00", "end": "22:00"},
+        {"days": [5, 6],          "start": "08:00", "end": "11:00"},
+        {"days": [5, 6],          "start": "17:00", "end": "22:00"}
+      ]
+    },
+    {
+      "name": "Phoenix HSBC",
+      "venue_id": "f857ef2e-075f-4ecb-a7ec-fee3cfc4aece",
+      "slug": "phoenix-hsbc-racquet-club",
+      "facilities": [
+        {"name": "HSBC Padel Court", "id": "49b6caf5-e5f5-4c69-adc7-50c87f8b6f38"}
+      ],
+      "auto_discover_padel": false,
+      "schedule": [
+        {"days": [4, 5, 6], "start": "06:00", "end": "23:00"}
+      ],
+      "_note": "Mon-Thu skipped. Fri-Sun (4=Fri, 5=Sat, 6=Sun) full day. Coupon HSBCPHOENIX gives free booking with HSBC Premier/Taj/Prive card."
+    }
+  ],
+  "_schedule_note": "days uses Python weekday(): Mon=0..Sun=6. start/end are IST 24h."
+}

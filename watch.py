@@ -138,6 +138,12 @@ def find_runs(slots, schedule, min_minutes, max_display_minutes):
     """
     parsed = []
     for s in slots:
+        # A slot is *actually* bookable only when BOTH conditions hold:
+        #   is_available=True       → the slot is in the active booking pool for its tier
+        #                              (e.g. excludes HSBC-tier-greyed slots, or past-closing slots)
+        #   available_count > 0     → there's at least one free court at that time
+        if not s.get("is_available", False):
+            continue
         if s.get("available_count", 0) <= 0:
             continue
         try:

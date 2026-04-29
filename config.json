@@ -1,12 +1,14 @@
 {
   "_comment": "Hudle padel watcher — public config. Secrets come from env vars (see README).",
   "horizon_days": 7,
-  "min_duration_minutes": 90,
+  "min_duration_minutes": 60,
+  "max_display_minutes": 120,
   "venues": [
     {
       "name": "Willingdon",
       "venue_id": "da29aee3-5618-4a95-b9b7-2b1073fb0a65",
       "slug": "willingdon-outdoor-sports-arena-maali-khata",
+      "app_link": "https://hudle.page.link/8Dh5Qij1cTQ8JaSKA",
       "facilities": [],
       "auto_discover_padel": true,
       "schedule": [
@@ -19,6 +21,7 @@
       "name": "CCI",
       "venue_id": "c7555a38-05f8-42a0-bf82-88fc3d7f96f8",
       "slug": "the-cricket-club-of-india",
+      "app_link": "https://hudle.page.link/BWocJ9DwNt8Zrmth9",
       "facilities": [],
       "auto_discover_padel": true,
       "schedule": [
@@ -31,6 +34,8 @@
       "name": "Phoenix HSBC",
       "venue_id": "f857ef2e-075f-4ecb-a7ec-fee3cfc4aece",
       "slug": "phoenix-hsbc-racquet-club",
+      "app_link": "https://hudle.page.link/dNDft8kPzfAFCtHf7",
+      "coupon_note": "Free with HSBCPHOENIX coupon (HSBC Premier/Taj/Prive card)",
       "facilities": [
         {"name": "HSBC Padel Court", "id": "49b6caf5-e5f5-4c69-adc7-50c87f8b6f38"}
       ],

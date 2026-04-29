@@ -126,14 +126,16 @@ def is_slot_in_schedule(slot_dt, schedule):
     return any(dow in win["days"] and time_in_window(t, win["start"], win["end"]) for win in schedule)
 
 # ---------- core: find runs ----------
-def find_runs(slots, schedule, min_minutes):
+def find_runs(slots, schedule, min_minutes, max_display_minutes):
     """
     slots: list of slot dicts (from API), sorted by start_time.
-    Returns list of run dicts: {date, start, end, duration_min, slots:[ids], price_total}
-    A run is N consecutive available slots, all within an eligible time window,
-    contiguous (each slot.end == next slot.start), totaling ≥ min_minutes.
+    Returns list of run dicts: {date_iso, weekday, start, end, duration_min, ...}.
+    A "run" is a maximal contiguous block of available slots all within an eligible
+    schedule window. Runs shorter than min_minutes are dropped. Runs longer than
+    max_display_minutes get reported as a max_display_minutes window starting at the
+    run's first slot (so a 4h opening reports as a 2h window — the user can see the
+    longer span on Hudle if they want).
     """
-    # parse start/end for each slot
     parsed = []
     for s in slots:
         if s.get("available_count", 0) <= 0:
@@ -143,7 +145,6 @@ def find_runs(slots, schedule, min_minutes):
             et = datetime.strptime(s["end_time"],   "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
         except Exception:
             continue
-        # Filter to schedule window
         if not is_slot_in_schedule(st, schedule):
             continue
         parsed.append({"start": st, "end": et, "raw": s})
@@ -156,16 +157,18 @@ def find_runs(slots, schedule, min_minutes):
         while j + 1 < len(parsed) and parsed[j + 1]["start"] == parsed[j]["end"] \
                 and is_slot_in_schedule(parsed[j + 1]["start"], schedule):
             j += 1
-        # parsed[i..j] is a maximal contiguous run; emit all sub-runs ≥ min_minutes that are also contained
-        # We emit the LONGEST contiguous run only — more digestible than every sub-window.
-        run_min = (parsed[j]["end"] - parsed[i]["start"]).total_seconds() / 60
-        if run_min >= min_minutes:
+        actual_min = (parsed[j]["end"] - parsed[i]["start"]).total_seconds() / 60
+        if actual_min >= min_minutes:
+            display_min = min(actual_min, max_display_minutes)
+            display_end = parsed[i]["start"] + timedelta(minutes=display_min)
             runs.append({
-                "date": parsed[i]["start"].strftime("%Y-%m-%d"),
+                "date_iso": parsed[i]["start"].strftime("%Y-%m-%d"),
+                "date_dm": parsed[i]["start"].strftime("%d/%m"),
                 "weekday": parsed[i]["start"].strftime("%a"),
                 "start": parsed[i]["start"].strftime("%H:%M"),
-                "end": parsed[j]["end"].strftime("%H:%M"),
-                "duration_min": int(run_min),
+                "end": display_end.strftime("%H:%M"),
+                "duration_min": int(display_min),
+                "actual_duration_min": int(actual_min),
                 "slot_ids": [p["raw"]["id"] for p in parsed[i:j + 1]],
                 "price_total": sum(float(p["raw"].get("price", 0)) for p in parsed[i:j + 1]),
             })
@@ -176,7 +179,8 @@ def find_runs(slots, schedule, min_minutes):
 def main():
     cfg = json.loads(CONFIG_PATH.read_text())
     horizon = int(cfg.get("horizon_days", 7))
-    min_min = int(cfg.get("min_duration_minutes", 90))
+    min_min = int(cfg.get("min_duration_minutes", 60))
+    max_disp = int(cfg.get("max_display_minutes", 120))
 
     today = datetime.now(IST).date()
     end_date = today + timedelta(days=horizon)
@@ -210,12 +214,13 @@ def main():
             all_slots = []
             for day in slot_data:
                 all_slots.extend(day.get("slots", []))
-            runs = find_runs(all_slots, venue["schedule"], min_min)
+            runs = find_runs(all_slots, venue["schedule"], min_min, max_disp)
             for run in runs:
-                key = f"{venue['name']}|{fac['name']}|{run['date']}|{run['start']}|{run['end']}"
+                key = f"{venue['name']}|{fac['name']}|{run['date_iso']}|{run['start']}|{run['end']}"
                 current[key] = {
                     "venue": venue["name"],
-                    "venue_slug": venue.get("slug"),
+                    "venue_app_link": venue.get("app_link"),
+                    "venue_coupon_note": venue.get("coupon_note"),
                     "facility": fac["name"],
                     **run,
                 }
@@ -237,24 +242,28 @@ def main():
     log(f"current_runs={len(current)}  prior_runs={len(prior)}  new={len(new_keys)}")
 
     if new_keys:
-        # group new runs by venue + date for readability
-        lines = ["🎾 <b>New padel slots available</b>"]
+        # Group by venue, then by date inside venue, for clean shareable layout.
+        lines = ["🎾 <b>Padel — slots open</b>"]
         by_venue = {}
         for k in new_keys:
             r = current[k]
             by_venue.setdefault(r["venue"], []).append(r)
         for venue_name, runs in by_venue.items():
-            lines.append(f"\n🏟 <b>{venue_name}</b>")
-            runs.sort(key=lambda r: (r["date"], r["start"], r["facility"]))
+            v0 = runs[0]
+            lines.append(f"\n📍 <b>{venue_name}</b>")
+            runs.sort(key=lambda r: (r["date_iso"], r["start"], r["facility"]))
             for r in runs:
                 hrs = r["duration_min"] / 60
-                price = f"₹{int(r['price_total'])}" if r["price_total"] else ""
+                # Format duration cleanly: "1h", "1.5h", "2h"
+                hr_str = f"{hrs:.0f}h" if hrs == int(hrs) else f"{hrs:.1f}h"
                 lines.append(
-                    f"  • {r['weekday']} {r['date']} {r['start']}–{r['end']} "
-                    f"({hrs:.1f}h) — <i>{r['facility']}</i> {price}".rstrip()
+                    f"{r['weekday']} {r['date_dm']} · {r['start']}–{r['end']} · "
+                    f"{r['facility']} ({hr_str})"
                 )
-        # link
-        lines.append('\n🔗 Book at <a href="https://hudle.in/">hudle.in</a> or in the app.')
+            if v0.get("venue_coupon_note"):
+                lines.append(f"<i>💳 {v0['venue_coupon_note']}</i>")
+            if v0.get("venue_app_link"):
+                lines.append(f"👉 <a href=\"{v0['venue_app_link']}\">Open in Hudle app</a>")
         telegram_send(cfg, "\n".join(lines))
 
     # persist

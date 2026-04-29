@@ -327,16 +327,11 @@ def main():
                     suffix = " <i>(FREE w/ HSBCPHOENIX)</i>"
                 lines.append(f"<b>{venue_name}</b> · {times}{suffix}")
 
-        # Compact app links footer.
-        venue_links = []
-        seen = set()
-        for r in current.values():
-            v = r["venue"]
-            if v in seen or not r.get("venue_app_link"): continue
-            seen.add(v)
-            venue_links.append(f"<a href=\"{r['venue_app_link']}\">{v}</a>")
-        if venue_links:
-            lines.append("\n📲 " + "  ·  ".join(venue_links))
+        # Single Hudle app link — all venue deep-links open the same app, no point
+        # showing three. Pick any venue's deep link as the entry point.
+        any_link = next((r.get("venue_app_link") for r in current.values() if r.get("venue_app_link")), None)
+        if any_link:
+            lines.append(f"\n📲 <a href=\"{any_link}\">Open in Hudle app</a>")
 
         telegram_send(cfg, "\n".join(lines))
 

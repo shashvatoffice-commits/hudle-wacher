@@ -260,9 +260,26 @@ def main():
     if new_keys:
         # Compact format: group by DATE (the way you plan), one line per venue per day,
         # times comma-separated. Court names dropped — visible in the booking flow.
-        # Time strings shorten ":00" away ("10–11" not "10:00–11:00") for scannability.
-        def short_t(t):
-            return t[:-3] if t.endswith(":00") else t
+        # Times use am/pm 12-hour format ("8–10pm" not "20–22") — way more readable.
+        def fmt_time(t_str):
+            """ "20:30:00" -> ("8:30", "pm");  "10:00" -> ("10", "am") """
+            parts = t_str.split(":")
+            h, m = int(parts[0]), int(parts[1])
+            suf = "am" if h < 12 else "pm"
+            h12 = h % 12
+            if h12 == 0:
+                h12 = 12
+            return (f"{h12}:{m:02d}" if m else f"{h12}", suf)
+
+        def short_t(start, end):
+            """Format a time range. If both ends share am/pm, only suffix the end:
+                  9-11am, 8:30-10pm, 4-5pm. If they cross periods, suffix both:
+                  11am-12pm, 11am-1pm. """
+            s, ssuf = fmt_time(start)
+            e, esuf = fmt_time(end)
+            if ssuf == esuf:
+                return f"{s}–{e}{esuf}"
+            return f"{s}{ssuf}–{e}{esuf}"
 
         # Build {date_iso: {venue_name: [run, run, ...]}}, then drop runs that are
         # strictly contained inside another run at the same venue/day. Reason: if
@@ -299,7 +316,7 @@ def main():
             lines.append(f"\n<b>📅 {sample['weekday']} {sample['date_dm']}</b>")
             for venue_name in sorted(day.keys()):
                 runs = sorted(day[venue_name], key=lambda r: r["start"])
-                times = ", ".join(f"{short_t(r['start'])}–{short_t(r['end'])}" for r in runs)
+                times = ", ".join(short_t(r["start"], r["end"]) for r in runs)
                 v0 = runs[0]
                 suffix = ""
                 if v0.get("venue_coupon_note") and "FREE" in v0["venue_coupon_note"].upper():

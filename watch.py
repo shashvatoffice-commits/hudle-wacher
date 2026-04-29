@@ -258,32 +258,65 @@ def main():
     log(f"current_runs={len(current)}  prior_runs={len(prior)}  new={len(new_keys)}")
 
     if new_keys:
-        # Group by venue, then by date inside venue, for clean shareable layout.
-        lines = ["🎾 <b>Padel — slots open</b>"]
-        by_venue = {}
+        # Compact format: group by DATE (the way you plan), one line per venue per day,
+        # times comma-separated. Court names dropped — visible in the booking flow.
+        # Time strings shorten ":00" away ("10–11" not "10:00–11:00") for scannability.
+        def short_t(t):
+            return t[:-3] if t.endswith(":00") else t
+
+        # Build {date_iso: {venue_name: [run, run, ...]}}, then drop runs that are
+        # strictly contained inside another run at the same venue/day. Reason: if
+        # 09–11 is open you could already play 10–11; listing both is redundant.
+        # Only "maximal" time ranges survive.
+        def to_min(s):
+            h, m = s.split(":")[:2]
+            return int(h) * 60 + int(m)
+
+        def dominates(a, b):
+            # a contains b strictly: a covers b's range and is at least as long.
+            return (
+                to_min(a["start"]) <= to_min(b["start"])
+                and to_min(a["end"]) >= to_min(b["end"])
+                and (to_min(a["end"]) - to_min(a["start"])) > (to_min(b["end"]) - to_min(b["start"]))
+            )
+
+        by_date = {}
+        # Group all runs per (venue, date) first
+        by_vd = {}
         for k in new_keys:
             r = current[k]
-            by_venue.setdefault(r["venue"], []).append(r)
-        for venue_name, runs in by_venue.items():
-            v0 = runs[0]
-            # Venue header — coupon note inline so user immediately sees pricing reality.
-            header = f"\n📍 <b>{venue_name}</b>"
-            if v0.get("venue_coupon_note"):
-                header += f"  <i>— {v0['venue_coupon_note']}</i>"
-            lines.append(header)
-            runs.sort(key=lambda r: (r["date_iso"], r["start"]))
-            for r in runs:
-                hrs = r["duration_min"] / 60
-                hr_str = f"{hrs:.0f}h" if hrs == int(hrs) else f"{hrs:.1f}h"
-                # Sort facility names so "Court 1, Court 3" reads naturally.
-                facs = sorted(r.get("facilities", [r.get("facility", "")]))
-                fac_str = ", ".join(facs)
-                lines.append(
-                    f"{r['weekday']} {r['date_dm']} · {r['start']}–{r['end']} · "
-                    f"{fac_str} ({hr_str})"
-                )
-            if v0.get("venue_app_link"):
-                lines.append(f"👉 <a href=\"{v0['venue_app_link']}\">Open in Hudle app</a>")
+            by_vd.setdefault((r["venue"], r["date_iso"]), []).append(r)
+        # Filter dominated runs within each group
+        for (venue_name, date_iso), runs in by_vd.items():
+            kept = [r for r in runs if not any(dominates(o, r) for o in runs if o is not r)]
+            by_date.setdefault(date_iso, {})[venue_name] = kept
+
+        lines = ["🎾 <b>Padel — slots open</b>"]
+        for date_iso in sorted(by_date.keys()):
+            day = by_date[date_iso]
+            # Use any run for the weekday/date_dm format
+            sample = next(iter(day.values()))[0]
+            lines.append(f"\n<b>📅 {sample['weekday']} {sample['date_dm']}</b>")
+            for venue_name in sorted(day.keys()):
+                runs = sorted(day[venue_name], key=lambda r: r["start"])
+                times = ", ".join(f"{short_t(r['start'])}–{short_t(r['end'])}" for r in runs)
+                v0 = runs[0]
+                suffix = ""
+                if v0.get("venue_coupon_note") and "FREE" in v0["venue_coupon_note"].upper():
+                    suffix = " <i>(FREE w/ HSBCPHOENIX)</i>"
+                lines.append(f"{venue_name} · {times}{suffix}")
+
+        # Compact app links footer.
+        venue_links = []
+        seen = set()
+        for r in current.values():
+            v = r["venue"]
+            if v in seen or not r.get("venue_app_link"): continue
+            seen.add(v)
+            venue_links.append(f"<a href=\"{r['venue_app_link']}\">{v}</a>")
+        if venue_links:
+            lines.append("\n📲 " + "  ·  ".join(venue_links))
+
         telegram_send(cfg, "\n".join(lines))
 
     # persist

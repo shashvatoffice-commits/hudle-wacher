@@ -12,6 +12,7 @@ No LLM calls. Pure stdlib. Logs to ~/.claude/hudle-watcher/watch.log.
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -316,7 +317,16 @@ def main():
             lines.append(f"\n<b>📅 {sample['weekday']} {sample['date_dm']}</b>")
             for venue_name in sorted(day.keys()):
                 runs = sorted(day[venue_name], key=lambda r: r["start"])
-                times = ", ".join(short_t(r["start"], r["end"]) for r in runs)
+                # Extract court numbers from facility names: "Padel Court 1" -> 1.
+                # Phoenix's "HSBC Padel Court" has no number, so falls back to no suffix.
+                def courts_str(facs):
+                    nums = sorted({int(m.group(1)) for f in facs if (m := re.search(r"Court\s+(\d+)", f))})
+                    if not nums: return ""
+                    if len(nums) == 1: return f" (Court {nums[0]})"
+                    return f" (Courts {', '.join(str(n) for n in nums)})"
+
+                parts = [f"{short_t(r['start'], r['end'])}{courts_str(r.get('facilities', []))}" for r in runs]
+                times = ", ".join(parts)
                 v0 = runs[0]
                 suffix = ""
                 if v0.get("venue_coupon_note") and "FREE" in v0["venue_coupon_note"].upper():

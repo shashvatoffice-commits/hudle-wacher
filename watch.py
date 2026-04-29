@@ -250,18 +250,19 @@ def main():
             by_venue.setdefault(r["venue"], []).append(r)
         for venue_name, runs in by_venue.items():
             v0 = runs[0]
-            lines.append(f"\n📍 <b>{venue_name}</b>")
+            # Venue header — coupon note inline so user immediately sees pricing reality.
+            header = f"\n📍 <b>{venue_name}</b>"
+            if v0.get("venue_coupon_note"):
+                header += f"  <i>— {v0['venue_coupon_note']}</i>"
+            lines.append(header)
             runs.sort(key=lambda r: (r["date_iso"], r["start"], r["facility"]))
             for r in runs:
                 hrs = r["duration_min"] / 60
-                # Format duration cleanly: "1h", "1.5h", "2h"
                 hr_str = f"{hrs:.0f}h" if hrs == int(hrs) else f"{hrs:.1f}h"
                 lines.append(
                     f"{r['weekday']} {r['date_dm']} · {r['start']}–{r['end']} · "
                     f"{r['facility']} ({hr_str})"
                 )
-            if v0.get("venue_coupon_note"):
-                lines.append(f"<i>💳 {v0['venue_coupon_note']}</i>")
             if v0.get("venue_app_link"):
                 lines.append(f"👉 <a href=\"{v0['venue_app_link']}\">Open in Hudle app</a>")
         telegram_send(cfg, "\n".join(lines))

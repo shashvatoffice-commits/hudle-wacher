@@ -222,14 +222,24 @@ def main():
                 all_slots.extend(day.get("slots", []))
             runs = find_runs(all_slots, venue["schedule"], min_min, max_disp)
             for run in runs:
-                key = f"{venue['name']}|{fac['name']}|{run['date_iso']}|{run['start']}|{run['end']}"
-                current[key] = {
-                    "venue": venue["name"],
-                    "venue_app_link": venue.get("app_link"),
-                    "venue_coupon_note": venue.get("coupon_note"),
-                    "facility": fac["name"],
-                    **run,
-                }
+                # Dedup key intentionally OMITS facility — same venue/date/window across
+                # multiple courts is one alert, with court names merged for display.
+                # User can only physically be at one court, so multiple options at the
+                # same time = redundant noise.
+                key = f"{venue['name']}|{run['date_iso']}|{run['start']}|{run['end']}"
+                if key in current:
+                    # Append this facility to the existing entry.
+                    existing = current[key]
+                    if fac["name"] not in existing["facilities"]:
+                        existing["facilities"].append(fac["name"])
+                else:
+                    current[key] = {
+                        "venue": venue["name"],
+                        "venue_app_link": venue.get("app_link"),
+                        "venue_coupon_note": venue.get("coupon_note"),
+                        "facilities": [fac["name"]],
+                        **run,
+                    }
 
     if auth_failed:
         telegram_send(cfg, "🔐 <b>Hudle watcher: auth token expired.</b>\nRe-capture a fresh cURL from hudle.in DevTools and update <code>~/.claude/hudle-watcher/config.json</code> token field.")
@@ -261,13 +271,16 @@ def main():
             if v0.get("venue_coupon_note"):
                 header += f"  <i>— {v0['venue_coupon_note']}</i>"
             lines.append(header)
-            runs.sort(key=lambda r: (r["date_iso"], r["start"], r["facility"]))
+            runs.sort(key=lambda r: (r["date_iso"], r["start"]))
             for r in runs:
                 hrs = r["duration_min"] / 60
                 hr_str = f"{hrs:.0f}h" if hrs == int(hrs) else f"{hrs:.1f}h"
+                # Sort facility names so "Court 1, Court 3" reads naturally.
+                facs = sorted(r.get("facilities", [r.get("facility", "")]))
+                fac_str = ", ".join(facs)
                 lines.append(
                     f"{r['weekday']} {r['date_dm']} · {r['start']}–{r['end']} · "
-                    f"{r['facility']} ({hr_str})"
+                    f"{fac_str} ({hr_str})"
                 )
             if v0.get("venue_app_link"):
                 lines.append(f"👉 <a href=\"{v0['venue_app_link']}\">Open in Hudle app</a>")

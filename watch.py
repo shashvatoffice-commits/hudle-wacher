@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 STATE_PATH = ROOT / "state.json"
 LOG_PATH = ROOT / "watch.log"
+HEARTBEAT_PATH = ROOT / "HEARTBEAT.md"
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -204,7 +205,9 @@ def main():
     # collect all (venue, facility, run) tuples — current state
     current = {}  # key -> dict
     auth_failed = False
+    failed_venues = set()  # transient failures → inherit prior state for these venues
     for venue in cfg["venues"]:
+        venue_had_failure = False
         for fac in venue["facilities"]:
             path = (
                 f"/api/v1/venues/{venue['venue_id']}/facilities/{fac['id']}/slots"
@@ -216,6 +219,7 @@ def main():
                 continue
             if not r or not r.get("success"):
                 log(f"  {venue['name']} / {fac['name']}: skip ({r.get('message') if r else 'no resp'})")
+                venue_had_failure = True
                 continue
             slot_data = r["data"].get("slot_data", [])
             all_slots = []
@@ -241,6 +245,8 @@ def main():
                         "facilities": [fac["name"]],
                         **run,
                     }
+        if venue_had_failure:
+            failed_venues.add(venue["name"])
 
     if auth_failed:
         telegram_send(cfg, "🔐 <b>Hudle watcher: auth token expired.</b>\nRe-capture a fresh cURL from hudle.in DevTools and update <code>~/.claude/hudle-watcher/config.json</code> token field.")
@@ -254,6 +260,18 @@ def main():
             prior = json.loads(STATE_PATH.read_text())
         except Exception:
             prior = {}
+
+    # If any venue had a transient failure this run, inherit its prior entries.
+    # Without this, a one-run network blip would clear those entries from state and
+    # the next successful run would re-alert on slots that were already known.
+    if failed_venues and prior:
+        inherited = 0
+        for k, r in prior.items():
+            if r.get("venue") in failed_venues and k not in current:
+                current[k] = r
+                inherited += 1
+        if inherited:
+            log(f"  inherited {inherited} prior entries from {failed_venues} (transient failure)")
 
     new_keys = sorted(set(current) - set(prior))
     log(f"current_runs={len(current)}  prior_runs={len(prior)}  new={len(new_keys)}")
@@ -337,6 +355,35 @@ def main():
 
     # persist
     STATE_PATH.write_text(json.dumps(current, indent=2))
+
+    # Weekly heartbeat (Sunday): touches HEARTBEAT.md and Telegram-pings to confirm
+    # the watcher is alive. The committed file edit also keeps the repo "active" so
+    # GitHub's 60-day inactivity rule doesn't auto-disable our scheduled workflow.
+    now = datetime.now(IST)
+    if now.weekday() == 6:  # Sunday
+        last_hb = None
+        if HEARTBEAT_PATH.exists():
+            try:
+                last_hb = datetime.fromtimestamp(HEARTBEAT_PATH.stat().st_mtime, IST)
+            except Exception:
+                last_hb = None
+        # Once per Sunday — only update if last update was 5+ days ago.
+        if last_hb is None or (now - last_hb).days >= 5:
+            venues_with_slots = sorted({r["venue"] for r in current.values()})
+            HEARTBEAT_PATH.write_text(
+                "# Hudle watcher heartbeat\n\n"
+                f"Last healthy run: {now.strftime('%Y-%m-%d %H:%M IST')}\n"
+                f"Slots currently tracked: {len(current)}\n"
+                f"Venues with bookable slots: {', '.join(venues_with_slots) or '(none)'}\n"
+            )
+            log(f"heartbeat written; pinging Telegram")
+            telegram_send(cfg, (
+                "💚 <b>Hudle watcher healthy</b>\n\n"
+                f"Tracking <b>{len(current)}</b> bookable slot windows across "
+                f"{len(venues_with_slots)} venue(s):\n"
+                + ("\n".join(f"• {v}" for v in venues_with_slots) if venues_with_slots else "• (none right now)")
+                + "\n\nNext heartbeat in ~7 days."
+            ))
 
 if __name__ == "__main__":
     main()

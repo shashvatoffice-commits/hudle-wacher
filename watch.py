@@ -363,10 +363,27 @@ def main():
     # threshold (default 24h). If so AND we haven't reminded for this slot yet,
     # send a single ⏰ reminder. This catches the case where the user got the
     # initial alert days ago and forgot.
+    #
+    # IMPORTANT: if a slot is BRAND NEW this run and its play time is already
+    # inside the reminder window, the new-slot alert above already serves as the
+    # reminder — don't double-fire. We mark those as reminded_near=True too.
     now_ist = datetime.now(IST)
+    new_keys_set = set(new_keys)
     near_keys = []
     for key, r in current.items():
         if r.get("reminded_near"):
+            continue
+        if key in new_keys_set:
+            # Just announced in the new-slot alert. If play is within window,
+            # mark reminder done so we don't fire a redundant ⏰ message now or later.
+            try:
+                play_dt = datetime.strptime(
+                    f"{r['date_iso']} {r['start']}", "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=IST)
+                if 0 < (play_dt - now_ist).total_seconds() / 3600 <= near_hrs:
+                    r["reminded_near"] = True
+            except Exception:
+                pass
             continue
         try:
             play_dt = datetime.strptime(

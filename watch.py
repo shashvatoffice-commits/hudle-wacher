@@ -189,6 +189,7 @@ def main():
     horizon = int(cfg.get("horizon_days", 7))
     min_min = int(cfg.get("min_duration_minutes", 60))
     max_disp = int(cfg.get("max_display_minutes", 120))
+    near_hrs = int(cfg.get("near_reminder_hours", 24))
 
     today = datetime.now(IST).date()
     end_date = today + timedelta(days=horizon)
@@ -201,6 +202,14 @@ def main():
             if discovered:
                 venue["facilities"] = discovered
             log(f"  using {len(venue['facilities'])}: {[f['name'] for f in venue['facilities']]}")
+
+    # Load prior state up front so we can inherit per-slot reminder flags.
+    prior = {}
+    if STATE_PATH.exists():
+        try:
+            prior = json.loads(STATE_PATH.read_text())
+        except Exception:
+            prior = {}
 
     # collect all (venue, facility, run) tuples — current state
     current = {}  # key -> dict
@@ -243,6 +252,9 @@ def main():
                         "venue_app_link": venue.get("app_link"),
                         "venue_coupon_note": venue.get("coupon_note"),
                         "facilities": [fac["name"]],
+                        # Inherit reminder flag if this exact slot was tracked before —
+                        # ensures we send the "still open" near-reminder at most once.
+                        "reminded_near": prior.get(key, {}).get("reminded_near", False),
                         **run,
                     }
         if venue_had_failure:
@@ -253,14 +265,7 @@ def main():
         log("auth failed; alerted user; exiting")
         sys.exit(1)
 
-    # diff vs prior state
-    prior = {}
-    if STATE_PATH.exists():
-        try:
-            prior = json.loads(STATE_PATH.read_text())
-        except Exception:
-            prior = {}
-
+    # diff vs prior state — prior was loaded at top of main()
     # If any venue had a transient failure this run, inherit its prior entries.
     # Without this, a one-run network blip would clear those entries from state and
     # the next successful run would re-alert on slots that were already known.
@@ -352,6 +357,64 @@ def main():
             lines.append(f"\n📲 <a href=\"{any_link}\">Open in Hudle app</a>")
 
         telegram_send(cfg, "\n".join(lines))
+
+    # ---- Near-date "still open" reminder ----
+    # For any slot still in current state, check if play time is within the reminder
+    # threshold (default 24h). If so AND we haven't reminded for this slot yet,
+    # send a single ⏰ reminder. This catches the case where the user got the
+    # initial alert days ago and forgot.
+    now_ist = datetime.now(IST)
+    near_keys = []
+    for key, r in current.items():
+        if r.get("reminded_near"):
+            continue
+        try:
+            play_dt = datetime.strptime(
+                f"{r['date_iso']} {r['start']}", "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=IST)
+        except Exception:
+            continue
+        hours_to_play = (play_dt - now_ist).total_seconds() / 3600
+        if 0 < hours_to_play <= near_hrs:
+            near_keys.append(key)
+            # Mark right away so a Telegram failure doesn't cause a re-send next run.
+            r["reminded_near"] = True
+
+    if near_keys:
+        # Build same date-grouped layout as the new-slot alert.
+        def fmt_time2(t_str):
+            parts = t_str.split(":"); h, m = int(parts[0]), int(parts[1])
+            suf = "am" if h < 12 else "pm"
+            h12 = h % 12
+            if h12 == 0: h12 = 12
+            return (f"{h12}:{m:02d}" if m else f"{h12}", suf)
+        def short_t2(start, end):
+            s, ss = fmt_time2(start); e, es = fmt_time2(end)
+            return f"{s}–{e}{es}" if ss == es else f"{s}{ss}–{e}{es}"
+
+        rlines = ["⏰ <b>Still open — playing soon?</b>"]
+        # Group by date → venue
+        by_date_r = {}
+        for k in near_keys:
+            r = current[k]
+            by_date_r.setdefault(r["date_iso"], {}).setdefault(r["venue"], []).append(r)
+        for date_iso in sorted(by_date_r):
+            day = by_date_r[date_iso]
+            sample = next(iter(day.values()))[0]
+            rlines.append(f"\n<b>📅 {sample['weekday']} {sample['date_dm']}</b>")
+            for venue_name in sorted(day):
+                runs = sorted(day[venue_name], key=lambda r: r["start"])
+                parts = [f"<b>{short_t2(r['start'], r['end'])}</b>" for r in runs]
+                v0 = runs[0]
+                suf = " <i>(FREE w/ HSBCPHOENIX)</i>" if v0.get("venue_coupon_note") and "FREE" in v0["venue_coupon_note"].upper() else ""
+                rlines.append(f"<b>{venue_name}</b> · {', '.join(parts)}{suf}")
+
+        any_link = next((r.get("venue_app_link") for r in current.values() if r.get("venue_app_link")), None)
+        if any_link:
+            rlines.append(f"\n📲 <a href=\"{any_link}\">Open in Hudle app</a>")
+
+        log(f"sending {len(near_keys)} near-date reminders")
+        telegram_send(cfg, "\n".join(rlines))
 
     # persist
     STATE_PATH.write_text(json.dumps(current, indent=2))

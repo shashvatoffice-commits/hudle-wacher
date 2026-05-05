@@ -3,6 +3,7 @@
   "horizon_days": 7,
   "min_duration_minutes": 60,
   "max_display_minutes": 120,
+  "near_reminder_hours": 24,
   "venues": [
     {
       "name": "Willingdon",

@@ -4,6 +4,17 @@
   "min_duration_minutes": 60,
   "max_display_minutes": 120,
   "near_reminder_hours": 24,
+  "auto_booking": {
+    "enabled": true,
+    "dry_run": true,
+    "venue": "Willingdon",
+    "days": [0, 1, 2, 3, 4],
+    "earliest_start": "19:00",
+    "latest_end": "22:00",
+    "duration_minutes": 120,
+    "max_court_switches": 3,
+    "_note": "Planner only: it may stitch consecutive slots across courts, but checkout remains disabled until Hudle's hold/cart API is mapped."
+  },
   "venues": [
     {
       "name": "Willingdon",

@@ -18,6 +18,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
@@ -127,6 +128,179 @@ def is_slot_in_schedule(slot_dt, schedule):
     t = slot_dt.strftime("%H:%M")
     return any(dow in win["days"] and time_in_window(t, win["start"], win["end"]) for win in schedule)
 
+# ---------- Willingdon auto-book planning ----------
+def _minutes_since_midnight(value):
+    """Return minutes since midnight for an HH:MM or HH:MM:SS string."""
+    h, m = value.split(":")[:2]
+    return int(h) * 60 + int(m)
+
+
+def _slot_price(slot):
+    try:
+        return float(slot.get("price", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _booking_segments(slot_inventory, policy):
+    """Normalize bookable API slots into deterministic, auto-bookable segments.
+
+    The regular watcher intentionally reports each court independently. The
+    auto-book planner needs a single inventory so that it can safely build a
+    continuous session which moves from one court to another at an exact slot
+    boundary.
+    """
+    earliest = _minutes_since_midnight(policy["earliest_start"])
+    latest_end = policy.get("latest_end")
+    latest_end_min = _minutes_since_midnight(latest_end) if latest_end else None
+    allowed_days = set(policy["days"])
+    seen = set()
+    out = []
+
+    for item in slot_inventory:
+        raw = item["slot"]
+        if not raw.get("is_available", False) or raw.get("available_count", 0) <= 0:
+            continue
+        try:
+            start = datetime.strptime(raw["start_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+            end = datetime.strptime(raw["end_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+        except (KeyError, TypeError, ValueError):
+            continue
+        slot_id = raw.get("id")
+        unique_id = slot_id or (item["facility_id"], start.isoformat(), end.isoformat())
+        if unique_id in seen or end <= start:
+            continue
+        seen.add(unique_id)
+
+        if start.weekday() not in allowed_days:
+            continue
+        if _minutes_since_midnight(start.strftime("%H:%M")) < earliest:
+            continue
+        # A session must stay inside the booking policy's evening boundary. This
+        # preserves Willingdon's existing 22:00 weekday preference.
+        if latest_end_min is not None and _minutes_since_midnight(end.strftime("%H:%M")) > latest_end_min:
+            continue
+
+        out.append({
+            "slot_id": slot_id,
+            "facility_id": item["facility_id"],
+            "facility_name": item["facility_name"],
+            "start": start,
+            "end": end,
+            "price": _slot_price(raw),
+        })
+
+    return sorted(out, key=lambda s: (s["start"], s["end"], s["facility_name"], s["facility_id"], s["slot_id"] or ""))
+
+
+def _compact_booking_segments(segments):
+    """Merge adjacent API grid slots on the same court into one checkout line."""
+    compact = []
+    for segment in segments:
+        if compact and compact[-1]["facility_id"] == segment["facility_id"] and compact[-1]["end"] == segment["start"]:
+            compact[-1]["end"] = segment["end"]
+            compact[-1]["slot_ids"].append(segment["slot_id"])
+            compact[-1]["price_total"] += segment["price"]
+        else:
+            compact.append({
+                "facility_id": segment["facility_id"],
+                "facility_name": segment["facility_name"],
+                "start": segment["start"],
+                "end": segment["end"],
+                "slot_ids": [segment["slot_id"]],
+                "price_total": segment["price"],
+            })
+    return compact
+
+
+def _booking_plan_rank(segments):
+    """Prefer fewer court changes, then fewer checkout lines, then lower cost."""
+    compact = _compact_booking_segments(segments)
+    return (
+        len(compact) - 1,
+        len(compact),
+        sum(line["price_total"] for line in compact),
+        tuple(line["facility_id"] for line in compact),
+    )
+
+
+def build_auto_booking_plans(slot_inventory, policy):
+    """Find qualifying continuous sessions, allowing court switches at boundaries.
+
+    Each returned plan covers exactly ``duration_minutes``. A plan contains one
+    checkout line per uninterrupted court segment, so a 60-minute Court 1 +
+    60-minute Court 2 session has two lines and one court switch.
+    """
+    required = int(policy["duration_minutes"])
+    max_switches = int(policy.get("max_court_switches", 0))
+    segments = _booking_segments(slot_inventory, policy)
+    by_start = defaultdict(list)
+    for segment in segments:
+        by_start[segment["start"]].append(segment)
+    for candidates in by_start.values():
+        candidates.sort(key=lambda s: (s["end"], s["facility_name"], s["facility_id"], s["slot_id"] or ""))
+
+    plans = []
+    for start in sorted(by_start):
+        target = start + timedelta(minutes=required)
+        memo = {}
+
+        def best_path(cursor):
+            if cursor == target:
+                return []
+            if cursor in memo:
+                return memo[cursor]
+            best = None
+            for segment in by_start.get(cursor, []):
+                if segment["end"] > target:
+                    continue
+                tail = best_path(segment["end"])
+                if tail is None:
+                    continue
+                candidate = [segment] + tail
+                if best is None or _booking_plan_rank(candidate) < _booking_plan_rank(best):
+                    best = candidate
+            memo[cursor] = best
+            return best
+
+        path = best_path(start)
+        if not path:
+            continue
+        booking_lines = _compact_booking_segments(path)
+        if len(booking_lines) - 1 > max_switches:
+            continue
+        plans.append({
+            "venue": policy["venue"],
+            "date_iso": start.strftime("%Y-%m-%d"),
+            "start": start.strftime("%H:%M"),
+            "end": target.strftime("%H:%M"),
+            "duration_minutes": required,
+            "court_switches": len(booking_lines) - 1,
+            "booking_lines": [
+                {
+                    **line,
+                    "start": line["start"].strftime("%H:%M"),
+                    "end": line["end"].strftime("%H:%M"),
+                }
+                for line in booking_lines
+            ],
+        })
+
+    # This is deliberately global, rather than simply earliest-slot-first: a
+    # single-court session is preferable to an earlier session that requires a
+    # court move. Within the same shape, take the earlier and cheaper option.
+    def rank_plan(plan):
+        return (
+            plan["court_switches"],
+            len(plan["booking_lines"]),
+            plan["date_iso"],
+            plan["start"],
+            sum(line["price_total"] for line in plan["booking_lines"]),
+            tuple(line["facility_id"] for line in plan["booking_lines"]),
+        )
+
+    return sorted(plans, key=rank_plan)
+
 # ---------- core: find runs ----------
 def find_runs(slots, schedule, min_minutes, max_display_minutes):
     """
@@ -190,6 +364,7 @@ def main():
     min_min = int(cfg.get("min_duration_minutes", 60))
     max_disp = int(cfg.get("max_display_minutes", 120))
     near_hrs = int(cfg.get("near_reminder_hours", 24))
+    auto_booking = cfg.get("auto_booking", {})
 
     today = datetime.now(IST).date()
     end_date = today + timedelta(days=horizon)
@@ -215,6 +390,7 @@ def main():
     current = {}  # key -> dict
     auth_failed = False
     failed_venues = set()  # transient failures → inherit prior state for these venues
+    auto_booking_inventory = []
     for venue in cfg["venues"]:
         venue_had_failure = False
         for fac in venue["facilities"]:
@@ -234,6 +410,12 @@ def main():
             all_slots = []
             for day in slot_data:
                 all_slots.extend(day.get("slots", []))
+            if auto_booking.get("enabled") and venue["name"] == auto_booking.get("venue"):
+                auto_booking_inventory.extend({
+                    "facility_id": fac["id"],
+                    "facility_name": fac["name"],
+                    "slot": slot,
+                } for slot in all_slots)
             runs = find_runs(all_slots, venue["schedule"], min_min, max_disp)
             for run in runs:
                 # Dedup key intentionally OMITS facility — same venue/date/window across
@@ -259,6 +441,26 @@ def main():
                     }
         if venue_had_failure:
             failed_venues.add(venue["name"])
+
+    # Build an independent Willingdon auto-book plan. This has no effect on the
+    # established watcher alerts above: it merely evaluates stricter booking
+    # rules and supports changing courts at consecutive slot boundaries.
+    if auto_booking.get("enabled"):
+        auto_plans = build_auto_booking_plans(auto_booking_inventory, auto_booking)
+        if auto_plans:
+            plan = auto_plans[0]
+            court_names = " → ".join(line["facility_name"] for line in plan["booking_lines"])
+            log(
+                "auto-book candidate: "
+                f"{plan['venue']} {plan['date_iso']} {plan['start']}–{plan['end']} "
+                f"({plan['court_switches']} switch(es): {court_names})"
+            )
+            if auto_booking.get("dry_run", True):
+                log("auto-book dry run: checkout deliberately disabled")
+            else:
+                # This guard remains until the exact Hudle checkout/hold API is
+                # mapped. It prevents a partially booked multi-court session.
+                log("auto-book blocked: checkout adapter has not been configured")
 
     if auth_failed:
         telegram_send(cfg, "🔐 <b>Hudle watcher: auth token expired.</b>\nRe-capture a fresh cURL from hudle.in DevTools and update <code>~/.claude/hudle-watcher/config.json</code> token field.")

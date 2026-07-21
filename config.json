@@ -11,7 +11,7 @@
     "days": [0, 1, 2, 3, 4],
     "earliest_start": "19:00",
     "latest_end": "22:00",
-    "duration_minutes": 120,
+    "duration_minutes": 90,
     "max_court_switches": 3,
     "_note": "Planner only: it may stitch consecutive slots across courts, but checkout remains disabled until Hudle's hold/cart API is mapped."
   },

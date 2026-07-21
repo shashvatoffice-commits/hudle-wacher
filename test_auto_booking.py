@@ -26,7 +26,7 @@ POLICY = {
     "days": [0, 1, 2, 3, 4],
     "earliest_start": "19:00",
     "latest_end": "22:00",
-    "duration_minutes": 120,
+    "duration_minutes": 90,
     "max_court_switches": 3,
 }
 
@@ -35,14 +35,15 @@ class AutoBookingPlannerTests(unittest.TestCase):
     def test_prefers_a_single_court_for_the_full_session(self):
         data = inventory(
             "court-1", "Padel Court 1",
-            slot("a", "2026-07-20 19:00:00", "2026-07-20 20:00:00"),
-            slot("b", "2026-07-20 20:00:00", "2026-07-20 21:00:00"),
+            slot("a", "2026-07-20 19:00:00", "2026-07-20 19:30:00"),
+            slot("b", "2026-07-20 19:30:00", "2026-07-20 20:00:00"),
+            slot("c", "2026-07-20 20:00:00", "2026-07-20 20:30:00"),
         ) + inventory(
             "court-2", "Padel Court 2",
-            slot("c", "2026-07-20 19:00:00", "2026-07-20 20:00:00"),
+            slot("d", "2026-07-20 19:00:00", "2026-07-20 20:00:00"),
         ) + inventory(
             "court-3", "Padel Court 3",
-            slot("d", "2026-07-20 20:00:00", "2026-07-20 21:00:00"),
+            slot("e", "2026-07-20 20:00:00", "2026-07-20 20:30:00"),
         )
 
         plans = watch.build_auto_booking_plans(data, POLICY)
@@ -58,13 +59,13 @@ class AutoBookingPlannerTests(unittest.TestCase):
             slot("a", "2026-07-20 19:00:00", "2026-07-20 20:00:00"),
         ) + inventory(
             "court-2", "Padel Court 2",
-            slot("b", "2026-07-20 20:00:00", "2026-07-20 21:00:00"),
+            slot("b", "2026-07-20 20:00:00", "2026-07-20 20:30:00"),
         )
 
         plan = watch.build_auto_booking_plans(data, POLICY)[0]
 
         self.assertEqual(plan["start"], "19:00")
-        self.assertEqual(plan["end"], "21:00")
+        self.assertEqual(plan["end"], "20:30")
         self.assertEqual(plan["court_switches"], 1)
         self.assertEqual([line["facility_id"] for line in plan["booking_lines"]], ["court-1", "court-2"])
 
@@ -78,15 +79,12 @@ class AutoBookingPlannerTests(unittest.TestCase):
         ) + inventory(
             "court-3", "Padel Court 3",
             slot("c", "2026-07-20 20:00:00", "2026-07-20 20:30:00"),
-        ) + inventory(
-            "court-4", "Padel Court 4",
-            slot("d", "2026-07-20 20:30:00", "2026-07-20 21:00:00"),
         )
 
         plan = watch.build_auto_booking_plans(data, POLICY)[0]
 
-        self.assertEqual(plan["court_switches"], 3)
-        self.assertEqual(len(plan["booking_lines"]), 4)
+        self.assertEqual(plan["court_switches"], 2)
+        self.assertEqual(len(plan["booking_lines"]), 3)
 
     def test_never_books_weekends_or_after_the_evening_boundary(self):
         data = inventory(
@@ -99,7 +97,7 @@ class AutoBookingPlannerTests(unittest.TestCase):
 
         self.assertEqual(watch.build_auto_booking_plans(data, POLICY), [])
 
-    def test_requires_exactly_continuous_120_minutes(self):
+    def test_requires_exactly_continuous_90_minutes(self):
         data = inventory(
             "court-1", "Padel Court 1",
             slot("a", "2026-07-20 19:00:00", "2026-07-20 20:00:00"),

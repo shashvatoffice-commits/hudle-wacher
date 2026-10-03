@@ -84,19 +84,8 @@ def hudle_call(path, cfg, method="GET"):
         return None
 
 def telegram_send(cfg, text):
-    url = f"https://api.telegram.org/bot{_secret('TELEGRAM_BOT_TOKEN', ['telegram','bot_token'])}/sendMessage"
-    data = urllib.parse.urlencode({
-        "chat_id": _secret("TELEGRAM_CHAT_ID", ["telegram","chat_id"]),
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": "true",
-    }).encode()
-    try:
-        with urllib.request.urlopen(url, data=data, timeout=15) as r:
-            return r.status == 200
-    except Exception as e:
-        log(f"telegram send failed: {e}")
-        return False
+    """Telegram integration retired: never read credentials or contact Telegram."""
+    return False
 
 # ---------- venue/facility discovery ----------
 def discover_padel_facilities(venue_id, cfg):
@@ -359,6 +348,10 @@ def find_runs(slots, schedule, min_minutes, max_display_minutes):
 
 # ---------- main ----------
 def main():
+    print("Hudle watcher is disabled; no polling or Telegram messages are sent.")
+    return
+
+    # Historical watcher logic retained for reference; execution is disabled.
     cfg = json.loads(CONFIG_PATH.read_text())
     horizon = int(cfg.get("horizon_days", 7))
     min_min = int(cfg.get("min_duration_minutes", 60))

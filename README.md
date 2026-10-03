@@ -2,7 +2,8 @@
 
 This integration was disabled at the owner's request on 2026-10-03.
 
-- The GitHub Actions schedule has been removed and its job is unconditionally skipped.
+- The GitHub Actions workflow was verified inactive. If resumed, the current
+  watcher script still exits immediately without polling or sending messages.
 - `watch.py` exits before loading configuration, polling Hudle, or changing state.
 - `telegram_send` is a no-op: it reads no credentials and makes no network request.
 - Telegram credentials and setup instructions have been removed from this README.
